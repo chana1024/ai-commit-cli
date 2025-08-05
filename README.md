@@ -91,10 +91,11 @@ git-ai-commit --provider gemini
 - `GIT_AI_COMMIT_MODEL`: Override default model (optional)
   - Claude: `claude-3-sonnet-20240229` (default) or `claude-3-haiku-20240307`
   - OpenAI: `gpt-4` (default) or `gpt-3.5-turbo`
-  - Gemini: `gemini-1.5-flash` (default) or `gemini-1.5-pro`
+  - Gemini: `gemini-1.5-flash` (default) or `gemini-1.5-pro` or `gemini-2.5-flash`
 - `CLAUDE_API_URL`: Override Claude API base URL (default: https://api.anthropic.com/v1/messages)
 - `OPENAI_API_URL`: Override OpenAI API base URL (default: https://api.openai.com/v1/chat/completions)
-- `GEMINI_API_URL`: Override Gemini API base URL (default: https://generativelanguage.googleapis.com/v1beta/models)
+- `GEMINI_API_URL`: Override Gemini API base URL (default: https://generativelanguage.googleapis.com/v1beta)
+- `DEBUG`: Enable debug logging (set to `true` or `1` to enable)
 
 ### Example Configuration
 
@@ -110,10 +111,18 @@ git-ai-commit --provider openai
 export GIT_AI_COMMIT_MODEL="gemini-1.5-pro"
 git-ai-commit --provider gemini
 
+# Use latest Gemini 2.5 Flash (if available)
+export GIT_AI_COMMIT_MODEL="gemini-2.5-flash"
+git-ai-commit --provider gemini
+
 # Use custom API endpoints (e.g., for proxy or self-hosted)
 export CLAUDE_API_URL="https://your-proxy.com/v1/messages"
 export OPENAI_API_URL="https://your-proxy.com/v1/chat/completions"
-export GEMINI_API_URL="https://your-proxy.com/v1beta/models"
+export GEMINI_API_URL="https://your-proxy.com/v1beta"
+
+# Enable debug logging for troubleshooting
+export DEBUG=true
+git-ai-commit --dry-run
 ```
 
 ## Example Output
@@ -171,6 +180,28 @@ Dry run mode - not committing
    - Verify the provider name is spelled correctly
 
 ### Debug Mode
+
+Enable detailed debug logging to troubleshoot issues:
+
+```bash
+# Enable debug mode
+export DEBUG=true
+git-ai-commit --dry-run
+
+# Or enable for a single run
+DEBUG=1 git-ai-commit --provider gemini --dry-run
+```
+
+Debug output includes:
+- Configuration validation
+- Git diff analysis details
+- Complete HTTP request/response information:
+  - Request URL and headers
+  - Full request body (pretty-printed JSON)
+  - Response body (pretty-printed JSON, truncated if large)
+  - Response length and parsing status
+- Internal processing steps
+- Error context and details
 
 Add `-x` to the shebang line to enable debug output:
 ```bash
