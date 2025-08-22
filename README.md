@@ -21,15 +21,11 @@ A bash CLI tool that generates commit messages using AI based on git diff analys
 
 ## Installation
 
-1. Download the script:
+1. Download and move the script:
 ```bash
 curl -O https://raw.githubusercontent.com/chana1024/ai-commit-cli/refs/heads/master/git-ai-commit
 chmod +x git-ai-commit
-```
-
-2. Move to a directory in your PATH:
-```bash
-sudo mv git-ai-commit /usr/local/bin/
+sudo mv git-ai-commit /opt/bin/
 ```
 
 3. Set up your API key:
