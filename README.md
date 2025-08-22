@@ -23,7 +23,7 @@ A bash CLI tool that generates commit messages using AI based on git diff analys
 
 1. Download the script:
 ```bash
-curl -O https://raw.githubusercontent.com/your-repo/git-ai-commit/main/git-ai-commit
+curl -O https://raw.githubusercontent.com/chana1024/ai-commit-cli/refs/heads/master/git-ai-commit
 chmod +x git-ai-commit
 ```
 
