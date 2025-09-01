@@ -48,7 +48,7 @@ OPTIONS:
     -s, --staged        Only analyze staged changes (default: all changes)
     -c, --context       Include more context in the analysis
     -d, --dry-run       Show the commit message without committing
-    -p, --provider      AI provider to use (claude, openai, gemini) [default: claude]
+    -p, --provider      AI provider to use (claude, openai, gemini) [default: gemini]
     -l, --limit         Maximum number of diff lines to analyze [default: 500]
     -h, --help          Show this help message
 
@@ -68,6 +68,8 @@ ENVIRONMENT VARIABLES:
     ANTHROPIC_API_KEY    API key for Claude (required for claude provider)
     OPENAI_API_KEY       API key for OpenAI (required for openai provider)
     GEMINI_API_KEY       API key for Gemini (required for gemini provider)
+                         - Keys starting with 'sk-' use OpenAI-compatible API format
+                         - Other keys use Google AI Gemini API format
     GIT_AI_COMMIT_MODEL  Override default model
     CLAUDE_API_URL       Override Claude API base URL
     OPENAI_API_URL       Override OpenAI API base URL
@@ -440,7 +442,11 @@ Requirements:
 
 Generate only the commit message, no additional text:"
 
-    local json_data=$(cat <<EOF
+    # Check if API key starts with 'sk' to determine API format
+    if echo "$GEMINI_API_KEY" | grep -q "^sk"; then
+        debug "Using OpenAI-compatible Gemini API format (sk key detected)"
+        
+        local json_data=$(cat <<EOF
 {
     "model": "$model",
     "messages": [
@@ -453,34 +459,85 @@ Generate only the commit message, no additional text:"
 EOF
 )
 
-    local api_url="${GEMINI_API_URL}/chat/completions"
-    
-    debug "Calling Gemini API..."
-    local response
-    response=$(make_http_request "$api_url" \
-               "Authorization: Bearer $GEMINI_API_KEY" \
-               "$json_data")
-    
-    if [[ $? -ne 0 ]]; then
-        debug "Gemini API call failed"
-        error "Failed to call Gemini API"
+        local api_url="${GEMINI_API_URL}/chat/completions"
+        local auth_header="Authorization: Bearer $GEMINI_API_KEY"
+        
+        debug "Calling Gemini API (OpenAI-compatible)..."
+        local response
+        response=$(make_http_request "$api_url" \
+                   "$auth_header" \
+                   "$json_data")
+        
+        if [[ $? -ne 0 ]]; then
+            debug "Gemini API call failed"
+            error "Failed to call Gemini API"
+        fi
+        
+        debug "Gemini API response received, parsing..."
+        
+        # Check for API errors first
+        local error_message=$(echo "$response" | jq -r '.error.message // empty' 2>/dev/null)
+        if [[ -n "$error_message" ]]; then
+            debug "Gemini API returned error: $error_message"
+            error "Gemini API error: $error_message"
+        fi
+        
+        # Parse response (OpenAI-compatible format)
+        local commit_message
+        commit_message=$(echo "$response" | jq -r '.choices[0].message.content' 2>/dev/null) || {
+            debug "Failed to parse Gemini API response. Raw response: $response"
+            error "Failed to parse Gemini API response"
+        }
+        
+    else
+        debug "Using Google AI Gemini API format (non-sk key detected)"
+        
+        local json_data=$(cat <<EOF
+{
+    "contents": [
+        {
+            "parts": [
+                {
+                    "text": $(echo "$prompt" | jq -Rs .)
+                }
+            ]
+        }
+    ]
+}
+EOF
+)
+
+        local api_url="${GEMINI_API_URL}/models/$model:generateContent"
+        local auth_header="X-goog-api-key: $GEMINI_API_KEY"
+        
+        debug "Calling Gemini API (Google AI format)..."
+        local response
+        response=$(make_http_request "$api_url" \
+                   "$auth_header" \
+                   "$json_data")
+        
+        if [[ $? -ne 0 ]]; then
+            debug "Gemini API call failed"
+            error "Failed to call Gemini API"
+        fi
+        
+        debug "Gemini API response received, parsing..."
+        
+        # Check for API errors first
+        local error_message=$(echo "$response" | jq -r '.error.message // empty' 2>/dev/null)
+        if [[ -n "$error_message" ]]; then
+            debug "Gemini API returned error: $error_message"
+            error "Gemini API error: $error_message"
+        fi
+        
+        # Parse response (Google AI format)
+        local commit_message
+        commit_message=$(echo "$response" | jq -r '.candidates[0].content.parts[0].text' 2>/dev/null) || {
+            debug "Failed to parse Gemini API response. Raw response: $response"
+            error "Failed to parse Gemini API response"
+        }
+        
     fi
-    
-    debug "Gemini API response received, parsing..."
-    
-    # Check for API errors first
-    local error_message=$(echo "$response" | jq -r '.error.message // empty' 2>/dev/null)
-    if [[ -n "$error_message" ]]; then
-        debug "Gemini API returned error: $error_message"
-        error "Gemini API error: $error_message"
-    fi
-    
-    # Parse response (prioritize OpenAI-compatible format)
-    local commit_message
-    commit_message=$(echo "$response" | jq -r '.choices[0].message.content' 2>/dev/null) || {
-        debug "Failed to parse Gemini API response. Raw response: $response"
-        error "Failed to parse Gemini API response"
-    }
     
     debug "Gemini API parsing successful. Commit message: '$commit_message'"
     echo "$commit_message"
