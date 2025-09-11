@@ -300,6 +300,8 @@ $diff_content
 
 Requirements:
 - Use conventional commit format: type(scope): description
+- if changes are related to muiltiple features, split them into multiple commits
+- if the commit message is longer than 72 characters, split it into multiple lines
 - Keep the message under 72 characters for the first line
 - Be specific about what changed
 - Focus on the 'why' rather than the 'how'
