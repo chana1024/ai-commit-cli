@@ -9,9 +9,10 @@ set -e
 STAGED_ONLY=false
 INCLUDE_CONTEXT=false
 DRY_RUN=false
-AI_PROVIDER="gemini"
+AI_PROVIDER="openai"
 MAX_DIFF_LINES=500
 DEBUG_MODE="${DEBUG:-false}"
+CONFIG_FILE="${HOME}/.ai-commit-cli/config.json"
 
 # API Configuration - can be overridden by environment variables
 CLAUDE_API_URL="${CLAUDE_API_URL:-https://api.anthropic.com/v1/messages}"
@@ -48,7 +49,7 @@ OPTIONS:
     -s, --staged        Only analyze staged changes (default: all changes)
     -c, --context       Include more context in the analysis
     -d, --dry-run       Show the commit message without committing
-    -p, --provider      AI provider to use (claude, openai, gemini) [default: gemini]
+    -p, --provider      AI provider to use (claude, openai, gemini) [default: openai]
     -l, --limit         Maximum number of diff lines to analyze [default: 500]
     -h, --help          Show this help message
 
@@ -71,10 +72,14 @@ ENVIRONMENT VARIABLES:
                          - Keys starting with 'sk-' use OpenAI-compatible API format
                          - Other keys use Google AI Gemini API format
     GIT_AI_COMMIT_MODEL  Override default model
-    CLAUDE_API_URL       Override Claude API base URL
-    OPENAI_API_URL       Override OpenAI API base URL
-    GEMINI_API_URL       Override Gemini API base URL
+    CLAUDE_API_URL       Override Claude API URL or base URL
+    OPENAI_API_URL       Override OpenAI API URL or base URL
+    GEMINI_API_URL       Override Gemini API URL or base URL
     DEBUG                Enable debug logging (true/1 to enable)
+
+CONFIG FILE:
+    Default path: ~/.ai-commit-cli/config.json
+    Priority: command line > config file > environment variables > built-in defaults
 
 EOF
 }
@@ -98,6 +103,156 @@ success() {
 # Print warning message
 warn() {
     echo -e "${YELLOW}Warning: $1${NC}"
+}
+
+trim_trailing_slash() {
+    local url="$1"
+    echo "${url%/}"
+}
+
+resolve_openai_api_url() {
+    local configured_url="$1"
+    local normalized_url
+
+    normalized_url=$(trim_trailing_slash "$configured_url")
+
+    case "$normalized_url" in
+        */chat/completions)
+            echo "$normalized_url"
+            ;;
+        */v1)
+            echo "${normalized_url}/chat/completions"
+            ;;
+        *)
+            echo "${normalized_url}/v1/chat/completions"
+            ;;
+    esac
+}
+
+resolve_claude_api_url() {
+    local configured_url="$1"
+    local normalized_url
+
+    normalized_url=$(trim_trailing_slash "$configured_url")
+
+    case "$normalized_url" in
+        */v1/messages)
+            echo "$normalized_url"
+            ;;
+        */v1)
+            echo "${normalized_url}/messages"
+            ;;
+        *)
+            echo "${normalized_url}/v1/messages"
+            ;;
+    esac
+}
+
+resolve_gemini_api_url() {
+    local configured_url="$1"
+    trim_trailing_slash "$configured_url"
+}
+
+normalize_provider_api_urls() {
+    CLAUDE_API_URL=$(resolve_claude_api_url "$CLAUDE_API_URL")
+    OPENAI_API_URL=$(resolve_openai_api_url "$OPENAI_API_URL")
+    GEMINI_API_URL=$(resolve_gemini_api_url "$GEMINI_API_URL")
+}
+
+ensure_config_file() {
+    local config_dir
+    config_dir=$(dirname "$CONFIG_FILE")
+
+    if [[ -f "$CONFIG_FILE" ]]; then
+        return 0
+    fi
+
+    mkdir -p "$config_dir"
+
+    cat > "$CONFIG_FILE" << EOF
+{
+  "provider": "openai",
+  "model": "gpt-4",
+  "base_url": "https://api.openai.com",
+  "api_key": ""
+}
+EOF
+
+    info "Created default config file: $CONFIG_FILE"
+}
+
+load_config() {
+    ensure_config_file
+
+    if ! command -v jq &> /dev/null; then
+        error "jq is required to read config file: $CONFIG_FILE"
+    fi
+
+    debug "Loading config file: $CONFIG_FILE"
+
+    local config_provider=""
+    config_provider=$(jq -r '.provider // empty' "$CONFIG_FILE")
+
+    if [[ -n "$config_provider" && -z "${CLI_PROVIDER_SET:-}" ]]; then
+        AI_PROVIDER="$config_provider"
+    fi
+
+    local config_scope=".providers.${AI_PROVIDER}"
+    local allow_top_level_fallback="false"
+    if [[ -z "$config_provider" || "$config_provider" == "$AI_PROVIDER" ]]; then
+        allow_top_level_fallback="true"
+    fi
+
+    local config_api_key=""
+    local config_model=""
+    local config_base_url=""
+
+    config_api_key=$(jq -r "${config_scope}.api_key // empty" "$CONFIG_FILE")
+    config_model=$(jq -r "${config_scope}.model // empty" "$CONFIG_FILE")
+    config_base_url=$(jq -r "${config_scope}.base_url // empty" "$CONFIG_FILE")
+
+    if [[ "$allow_top_level_fallback" == "true" ]]; then
+        if [[ -z "$config_api_key" ]]; then
+            config_api_key=$(jq -r '.api_key // empty' "$CONFIG_FILE")
+        fi
+        if [[ -z "$config_model" ]]; then
+            config_model=$(jq -r '.model // empty' "$CONFIG_FILE")
+        fi
+        if [[ -z "$config_base_url" ]]; then
+            config_base_url=$(jq -r '.base_url // empty' "$CONFIG_FILE")
+        fi
+    fi
+
+    case "$AI_PROVIDER" in
+        claude)
+            if [[ -n "$config_api_key" ]]; then
+                ANTHROPIC_API_KEY="$config_api_key"
+            fi
+            if [[ -n "$config_base_url" ]]; then
+                CLAUDE_API_URL=$(resolve_claude_api_url "$config_base_url")
+            fi
+            ;;
+        openai)
+            if [[ -n "$config_api_key" ]]; then
+                OPENAI_API_KEY="$config_api_key"
+            fi
+            if [[ -n "$config_base_url" ]]; then
+                OPENAI_API_URL=$(resolve_openai_api_url "$config_base_url")
+            fi
+            ;;
+        gemini)
+            if [[ -n "$config_api_key" ]]; then
+                GEMINI_API_KEY="$config_api_key"
+            fi
+            if [[ -n "$config_base_url" ]]; then
+                GEMINI_API_URL=$(resolve_gemini_api_url "$config_base_url")
+            fi
+            ;;
+    esac
+
+    if [[ -n "$config_model" ]]; then
+        GIT_AI_COMMIT_MODEL="$config_model"
+    fi
 }
 
 # Check if we're in a git repository
@@ -137,9 +292,9 @@ check_dependencies() {
             ;;
         openai)
             if [[ -z "$OPENAI_API_KEY" ]]; then
-                error "OPENAI_API_KEY environment variable is required for OpenAI provider"
+                warn "OPENAI_API_KEY is not set; continuing without Authorization header"
             fi
-            debug "OpenAI API key configured"
+            debug "OpenAI API key configured: $([[ -n "$OPENAI_API_KEY" ]] && echo yes || echo no)"
             debug "Using OpenAI API URL: $OPENAI_API_URL"
             ;;
         gemini)
@@ -208,10 +363,15 @@ make_http_request() {
     local url="$1"
     local headers="$2"
     local data="$3"
+    local header_args=""
     
     debug "Making HTTP request to: $url"
     debug "Request headers: Content-Type: application/json $headers"
     debug "Request data length: $(echo "$data" | wc -c) characters"
+
+    if [[ -n "$headers" ]]; then
+        header_args="--header \"$headers\""
+    fi
     
     # Show request body for debugging (pretty-printed JSON if possible)
     if [[ "$DEBUG_MODE" == "true" || "$DEBUG_MODE" == "1" ]]; then
@@ -235,7 +395,7 @@ make_http_request() {
             printf -v safe_data_for_log '%q' "$data"
             # Note: The logged command is a representation. The actual execution uses a pipe.
             # The header string is intentionally not quoted to allow shell word splitting.
-            debug "Executing command (representation): echo $safe_data_for_log | curl -s -X POST '$url' --header 'Content-Type: application/json' --header \"$headers\" --data-binary @-"
+            debug "Executing command (representation): echo $safe_data_for_log | curl -s -X POST '$url' --header 'Content-Type: application/json' $header_args --data-binary @-"
         fi
         
         # Execute the command by piping the data to curl. This is safer than using eval
@@ -243,7 +403,7 @@ make_http_request() {
         # We still use eval to parse the headers string, which may contain multiple,
         # quoted arguments for providers like Claude. The URL is single-quoted
         # to protect it from being modified by eval.
-        response=$(echo "$data" | eval "curl -s -X POST '$url' --header 'Content-Type: application/json' --header \"$headers\" --data-binary @-")
+        response=$(echo "$data" | eval "curl -s -X POST '$url' --header 'Content-Type: application/json' $header_args --data-binary @-")
 
     elif command -v wget &> /dev/null; then
         debug "Using wget for HTTP request"
@@ -251,12 +411,12 @@ make_http_request() {
         if [[ "$DEBUG_MODE" == "true" || "$DEBUG_MODE" == "1" ]]; then
             local safe_data_for_log
             printf -v safe_data_for_log '%q' "$data"
-            debug "Executing command (representation): echo $safe_data_for_log | wget -q -O- --header='Content-Type: application/json' --header $headers --post-data=@- '$url'"
+            debug "Executing command (representation): echo $safe_data_for_log | wget -q -O- --header='Content-Type: application/json' $header_args --post-data=@- '$url'"
         fi
         
         # The original implementation for wget was already using a pipe.
         # We add `eval` for consistency in header parsing, although it's less likely to be needed for wget.
-        response=$(echo "$data" | eval "wget -q -O- --header='Content-Type: application/json' --header $headers --post-data=@- '$url'")
+        response=$(echo "$data" | eval "wget -q -O- --header='Content-Type: application/json' $header_args --post-data=@- '$url'")
     else
         error "Neither curl nor wget available"
     fi
@@ -393,8 +553,14 @@ EOF
 
     debug "Calling OpenAI API..."
     local response
+    local auth_header=""
+
+    if [[ -n "$OPENAI_API_KEY" ]]; then
+        auth_header="Authorization: Bearer $OPENAI_API_KEY"
+    fi
+
     response=$(make_http_request "$OPENAI_API_URL" \
-               "Authorization: Bearer $OPENAI_API_KEY" \
+               "$auth_header" \
                "$json_data")
     
     if [[ $? -ne 0 ]]; then
@@ -583,6 +749,7 @@ parse_args() {
                 ;;
             -p|--provider)
                 AI_PROVIDER="$2"
+                CLI_PROVIDER_SET=true
                 shift 2
                 ;;
             -l|--limit)
@@ -603,6 +770,8 @@ parse_args() {
 # Main execution
 main() {
     parse_args "$@"
+    load_config
+    normalize_provider_api_urls
     
     debug "Starting git-ai-commit with the following configuration:"
     debug "- AI Provider: $AI_PROVIDER"

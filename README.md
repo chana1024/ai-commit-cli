@@ -8,7 +8,7 @@ A bash CLI tool that generates commit messages using AI based on git diff analys
 - **Flexible diff analysis**: Analyze all changes or only staged changes
 - **Dry run mode**: Preview commit messages without committing
 - **Customizable context**: Include more or less context in the analysis
-- **Multiple AI providers**: Support for Claude (default), OpenAI, and Google Gemini
+- **Multiple AI providers**: Support for Claude, OpenAI (default), and Google Gemini
 - **Safety features**: Confirmation prompts and error handling
 
 ## Requirements
@@ -28,9 +28,40 @@ chmod +x git-ai-commit
 sudo mv git-ai-commit /opt/bin/
 ```
 
-3. Set up your API key:
+2. The script will auto-create `~/.ai-commit-cli/config.json` on first run.
+
+Default content:
+
+```json
+{
+  "provider": "openai",
+  "model": "gpt-4",
+  "base_url": "https://api.openai.com",
+  "api_key": ""
+}
+```
+
+Fill in `api_key` before first real use, or provide `OPENAI_API_KEY` from the environment.
+If your OpenAI-compatible provider does not require a key, you can leave it empty.
+
+You can also edit it into per-provider settings:
+
+```json
+{
+  "provider": "openai",
+  "providers": {
+    "openai": {
+      "api_key": "your-openai-compatible-key",
+      "model": "deepseek-chat",
+      "base_url": "https://api.deepseek.com"
+    }
+  }
+}
+```
+
+3. Or set up your API key with environment variables if you do not want it in the config file:
 ```bash
-# For Claude (default)
+# For Claude
 export ANTHROPIC_API_KEY="your-claude-api-key"
 
 # For OpenAI
@@ -73,25 +104,44 @@ git-ai-commit --provider gemini
 - `-s, --staged`: Only analyze staged changes (default: all changes)
 - `-c, --context`: Include more context in the analysis
 - `-d, --dry-run`: Show the commit message without committing
-- `-p, --provider`: AI provider to use (claude, openai, gemini) [default: claude]
+- `-p, --provider`: AI provider to use (claude, openai, gemini) [default: openai]
 - `-l, --limit`: Maximum number of diff lines to analyze [default: 500]
 - `-h, --help`: Show help message
 
 ## Configuration
 
+Configuration priority is:
+
+`command line > ~/.ai-commit-cli/config.json > environment variables > built-in defaults`
+
+The config file supports these fields:
+
+- `provider`
+- `api_key`
+- `model`
+- `base_url`
+- `providers.<provider>.api_key`
+- `providers.<provider>.model`
+- `providers.<provider>.base_url`
+
 ### Environment Variables
 
 - `ANTHROPIC_API_KEY`: Required for Claude provider
-- `OPENAI_API_KEY`: Required for OpenAI provider  
+- `OPENAI_API_KEY`: Optional for OpenAI provider. Leave empty for compatible providers that do not require auth.
 - `GEMINI_API_KEY`: Required for Google Gemini provider
 - `GIT_AI_COMMIT_MODEL`: Override default model (optional)
   - Claude: `claude-3-sonnet-20240229` (default) or `claude-3-haiku-20240307`
   - OpenAI: `gpt-4` (default) or `gpt-3.5-turbo`
   - Gemini: `gemini-1.5-flash` (default) or `gemini-1.5-pro` or `gemini-2.5-flash`
-- `CLAUDE_API_URL`: Override Claude API base URL (default: https://api.anthropic.com/v1/messages)
-- `OPENAI_API_URL`: Override OpenAI API base URL (default: https://api.openai.com/v1/chat/completions)
-- `GEMINI_API_URL`: Override Gemini API base URL (default: https://generativelanguage.googleapis.com/v1beta)
+- `CLAUDE_API_URL`: Override Claude API URL or base URL (default endpoint: `https://api.anthropic.com/v1/messages`)
+- `OPENAI_API_URL`: Override OpenAI API URL or base URL (default endpoint: `https://api.openai.com/v1/chat/completions`)
+- `GEMINI_API_URL`: Override Gemini API URL or base URL (default root: `https://generativelanguage.googleapis.com/v1beta`)
 - `DEBUG`: Enable debug logging (set to `true` or `1` to enable)
+
+For `openai` provider, `base_url` may be either a full endpoint like
+`https://api.openai.com/v1/chat/completions`, a provider root like
+`https://api.openai.com`, or a versioned root like `https://api.deepseek.com/v1`.
+The script normalizes it to `/v1/chat/completions` automatically.
 
 ### Example Configuration
 
@@ -111,14 +161,29 @@ git-ai-commit --provider gemini
 export GIT_AI_COMMIT_MODEL="gemini-2.5-flash"
 git-ai-commit --provider gemini
 
-# Use custom API endpoints (e.g., for proxy or self-hosted)
-export CLAUDE_API_URL="https://your-proxy.com/v1/messages"
-export OPENAI_API_URL="https://your-proxy.com/v1/chat/completions"
+# Use custom API endpoints or base URLs
+export CLAUDE_API_URL="https://your-proxy.com"
+export OPENAI_API_URL="https://your-proxy.com/v1"
 export GEMINI_API_URL="https://your-proxy.com/v1beta"
 
 # Enable debug logging for troubleshooting
 export DEBUG=true
 git-ai-commit --dry-run
+```
+
+### OpenAI-Compatible Provider Example
+
+```json
+{
+  "provider": "openai",
+  "providers": {
+    "openai": {
+      "api_key": "your-provider-key",
+      "model": "deepseek-chat",
+      "base_url": "https://api.deepseek.com"
+    }
+  }
+}
 ```
 
 ## Example Output
