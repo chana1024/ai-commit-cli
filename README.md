@@ -204,9 +204,9 @@ Info: Generating commit message using claude...
 Generated commit message:
 feat(cli): improve structured commit message generation
 
-- [git-ai-commit] expand diff analysis with --stat, --name-status, and per-file excerpts for large patches
-- [git-ai-commit] require a conventional commit subject plus body bullets that cover major change groups
-- [git-ai-commit, README.md] preserve multi-line output in dry runs and git commits and document the new format
+- expand diff analysis with --stat, --name-status, and per-file excerpts for large patches [git-ai-commit]
+- require a conventional commit subject plus body bullets that cover major change groups [git-ai-commit]
+- preserve multi-line output in dry runs and git commits and document the new format [git-ai-commit, README.md]
 
 Dry run mode - not committing
 ```

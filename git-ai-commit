@@ -127,8 +127,8 @@ print_commit_message_preview() {
             continue
         fi
 
-        if [[ "$line" =~ ^-([[:space:]]+)\[([^][]+)\](.*)$ ]]; then
-            echo -e "-${BASH_REMATCH[1]}[${CYAN}${BASH_REMATCH[2]}${NC}]${YELLOW}${BASH_REMATCH[3]}${NC}"
+        if [[ "$line" =~ ^-([[:space:]]+)(.*[[:space:]])\[([^][]+)\][[:space:]]*$ ]]; then
+            echo -e "-${BASH_REMATCH[1]}${YELLOW}${BASH_REMATCH[2]}${NC}[${CYAN}${BASH_REMATCH[3]}${NC}]"
         else
             echo -e "${YELLOW}$line${NC}"
         fi
@@ -545,16 +545,16 @@ Return exactly this template:
 
 type(scope): short summary
 
-- [file-or-module-scope] summarize change group 1
-- [file-or-module-scope] summarize change group 2
-- [file-or-module-scope] summarize change group 3
+- summarize change group 1 [file-or-module-scope]
+- summarize change group 2 [file-or-module-scope]
+- summarize change group 3 [file-or-module-scope]
 
 Requirements:
 - The first line must be a conventional commit subject in the form type(scope): short summary.
 - Add a blank line between the subject and the bullet list body.
 - Use 3 to 6 bullet points in the body.
 - Cover all major change groups in one message.
-- Each body bullet must begin with [relevant file path(s) or module scope].
+- Each body bullet must end with [relevant file path(s) or module scope].
 - Prefer representative files or directories over exhaustive file lists.
 - Body bullets must describe behavior changes and any compatibility or risk notes when relevant.
 - Mention tests or documentation changes when they exist. Do not invent them when they do not exist.
