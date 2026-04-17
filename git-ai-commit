@@ -30,6 +30,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 MAGENTA='\033[0;35m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Print debug message
@@ -107,6 +108,31 @@ success() {
 # Print warning message
 warn() {
     echo -e "${YELLOW}Warning: $1${NC}"
+}
+
+print_commit_message_preview() {
+    local commit_message="$1"
+    local line=""
+    local printed_subject=false
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ -z "$line" ]]; then
+            echo
+            continue
+        fi
+
+        if [[ "$printed_subject" == "false" ]]; then
+            echo -e "${YELLOW}$line${NC}"
+            printed_subject=true
+            continue
+        fi
+
+        if [[ "$line" =~ ^-([[:space:]]+)\[([^][]+)\](.*)$ ]]; then
+            echo -e "-${BASH_REMATCH[1]}[${CYAN}${BASH_REMATCH[2]}${NC}]${YELLOW}${BASH_REMATCH[3]}${NC}"
+        else
+            echo -e "${YELLOW}$line${NC}"
+        fi
+    done <<< "$commit_message"
 }
 
 cleanup_commit_message_file() {
@@ -519,16 +545,16 @@ Return exactly this template:
 
 type(scope): short summary
 
-- summarize change group 1
-- summarize change group 2
-- summarize change group 3
+- [file-or-module-scope] summarize change group 1
+- [file-or-module-scope] summarize change group 2
+- [file-or-module-scope] summarize change group 3
 
 Requirements:
 - The first line must be a conventional commit subject in the form type(scope): short summary.
 - Add a blank line between the subject and the bullet list body.
 - Use 3 to 6 bullet points in the body.
 - Cover all major change groups in one message.
-- Each body bullet must include the relevant file path(s) or module scope for that change group.
+- Each body bullet must begin with [relevant file path(s) or module scope].
 - Prefer representative files or directories over exhaustive file lists.
 - Body bullets must describe behavior changes and any compatibility or risk notes when relevant.
 - Mention tests or documentation changes when they exist. Do not invent them when they do not exist.
@@ -990,7 +1016,7 @@ main() {
     
     echo
     echo -e "${GREEN}Generated commit message:${NC}"
-    echo -e "${YELLOW}$commit_message${NC}"
+    print_commit_message_preview "$commit_message"
     echo
     
     if [[ "$DRY_RUN" == "true" ]]; then
