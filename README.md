@@ -1,14 +1,15 @@
 # git-ai-commit
 
-A bash CLI tool that generates commit messages using AI based on git diff analysis.
+A bash CLI tool that generates commit messages using AI based on structured git diff analysis.
 
 ## Features
 
-- **AI-powered commit messages**: Uses Claude or OpenAI API to generate conventional commit messages
-- **Flexible diff analysis**: Analyze all changes or only staged changes
+- **AI-powered commit messages**: Uses Claude, OpenAI, or Gemini to generate conventional commit messages with subject + body
+- **Staged-first workflow**: Analyze and commit only staged changes by default
 - **Dry run mode**: Preview commit messages without committing
 - **Customizable context**: Include more or less context in the analysis
 - **Multiple AI providers**: Support for Claude, OpenAI (default), and Google Gemini
+- **Large diff coverage**: Includes `git diff --stat`, `git diff --name-status`, and per-file excerpts when the patch is large
 - **Safety features**: Confirmation prompts and error handling
 
 ## Requirements
@@ -77,10 +78,10 @@ echo 'export ANTHROPIC_API_KEY="your-claude-api-key"' >> ~/.bashrc
 ## Usage
 
 ```bash
-# Basic usage - analyze all changes and commit
+# Basic usage - analyze staged changes and commit
 git-ai-commit
 
-# Only analyze staged changes
+# Explicit staged mode (same as default, kept for compatibility)
 git-ai-commit --staged
 
 # Preview commit message without committing
@@ -89,7 +90,7 @@ git-ai-commit --dry-run
 # Include more context in analysis
 git-ai-commit --context
 
-# Limit diff analysis to 200 lines
+# Limit large-diff patch excerpts to 200 lines
 git-ai-commit --limit 200
 
 # Use OpenAI instead of Claude
@@ -101,11 +102,11 @@ git-ai-commit --provider gemini
 
 ## Options
 
-- `-s, --staged`: Only analyze staged changes (default: all changes)
+- `-s, --staged`: Analyze staged changes (default behavior; kept for compatibility)
 - `-c, --context`: Include more context in the analysis
 - `-d, --dry-run`: Show the commit message without committing
 - `-p, --provider`: AI provider to use (claude, openai, gemini) [default: openai]
-- `-l, --limit`: Maximum number of diff lines to analyze [default: 500]
+- `-l, --limit`: Maximum per-run patch excerpt lines for large diffs [default: 500]
 - `-h, --help`: Show help message
 
 ## Configuration
@@ -196,18 +197,22 @@ Info: Analyzing changes...
 Info: Generating commit message using claude...
 
 Generated commit message:
-feat(cli): add AI-powered commit message generation tool
+feat(cli): improve structured commit message generation
+
+- expand diff analysis with --stat, --name-status, and per-file excerpts for large patches
+- require a conventional commit subject plus body bullets that cover major change groups
+- preserve multi-line output in dry runs and git commits via a temporary message file
 
 Dry run mode - not committing
 ```
 
 ## How it Works
 
-1. **Analyzes git diff**: Captures changes using `git diff` or `git diff --staged`
-2. **Sends to AI API**: Makes HTTP request to Claude or OpenAI API with the diff and prompt
-3. **Generates message**: AI analyzes the changes and creates an appropriate commit message
+1. **Builds structured change context**: Captures `git diff --stat`, `git diff --name-status`, and either the full patch or per-file excerpts
+2. **Sends to AI API**: Makes HTTP request to Claude, OpenAI, or Gemini with a strict subject + body prompt
+3. **Generates message**: AI analyzes the changes and creates a conventional commit subject plus body bullets
 4. **Confirms with user**: Shows the generated message and asks for confirmation
-5. **Creates commit**: If approved, stages changes (if needed) and creates the commit
+5. **Creates commit**: If approved, creates the commit from the current staged snapshot with the full multi-line message
 
 ## Troubleshooting
 

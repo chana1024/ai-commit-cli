@@ -6,13 +6,14 @@
 set -e
 
 # Default values
-STAGED_ONLY=false
+STAGED_ONLY=true
 INCLUDE_CONTEXT=false
 DRY_RUN=false
 AI_PROVIDER="openai"
 MAX_DIFF_LINES=500
 DEBUG_MODE="${DEBUG:-false}"
 CONFIG_FILE="${HOME}/.ai-commit-cli/config.json"
+COMMIT_MESSAGE_FILE=""
 
 # API Configuration - can be overridden by environment variables
 CLAUDE_API_URL="${CLAUDE_API_URL:-https://api.anthropic.com/v1/messages}"
@@ -46,16 +47,16 @@ USAGE:
     git-ai-commit [OPTIONS]
 
 OPTIONS:
-    -s, --staged        Only analyze staged changes (default: all changes)
+    -s, --staged        Analyze staged changes (default behavior; kept for compatibility)
     -c, --context       Include more context in the analysis
     -d, --dry-run       Show the commit message without committing
     -p, --provider      AI provider to use (claude, openai, gemini) [default: openai]
-    -l, --limit         Maximum number of diff lines to analyze [default: 500]
+    -l, --limit         Maximum per-run patch excerpt lines for large diffs [default: 500]
     -h, --help          Show this help message
 
 EXAMPLES:
-    git-ai-commit                    # Analyze all changes and commit
-    git-ai-commit --staged           # Only analyze staged changes
+    git-ai-commit                    # Analyze staged changes and commit
+    git-ai-commit --staged           # Same as default, kept for compatibility
     git-ai-commit --dry-run          # Show commit message without committing
     git-ai-commit --context          # Include more context in analysis
 
@@ -103,6 +104,12 @@ success() {
 # Print warning message
 warn() {
     echo -e "${YELLOW}Warning: $1${NC}"
+}
+
+cleanup_commit_message_file() {
+    if [[ -n "$COMMIT_MESSAGE_FILE" && -f "$COMMIT_MESSAGE_FILE" ]]; then
+        rm -f "$COMMIT_MESSAGE_FILE"
+    fi
 }
 
 trim_trailing_slash() {
@@ -310,52 +317,240 @@ check_dependencies() {
     esac
 }
 
-# Get git diff based on options
-get_git_diff() {
-    local diff_cmd="git diff"
-    
-    debug "Getting git diff with options - staged: $STAGED_ONLY, context: $INCLUDE_CONTEXT"
-    
+build_git_diff_args() {
+    local args=()
+
     if [[ "$STAGED_ONLY" == "true" ]]; then
-        diff_cmd="git diff --staged"
+        args+=(--staged)
     fi
-    
-    # Add context if requested
+
+    args+=(--find-renames)
+
     if [[ "$INCLUDE_CONTEXT" == "true" ]]; then
-        diff_cmd="$diff_cmd --unified=5"
+        args+=(--unified=5)
     else
-        diff_cmd="$diff_cmd --unified=3"
+        args+=(--unified=3)
     fi
-    
-    debug "Executing command: $diff_cmd"
-    
-    # Get the diff and limit lines if specified
-    local diff_output
-    diff_output=$(eval "$diff_cmd" 2>/dev/null)
-    
-    if [[ -z "$diff_output" ]]; then
-        if [[ "$STAGED_ONLY" == "true" ]]; then
-            error "No staged changes found"
+
+    printf '%s\n' "${args[@]}"
+}
+
+build_git_summary_args() {
+    local args=()
+
+    if [[ "$STAGED_ONLY" == "true" ]]; then
+        args+=(--staged)
+    fi
+
+    args+=(--find-renames)
+    printf '%s\n' "${args[@]}"
+}
+
+build_file_diff_excerpt() {
+    local file_path="$1"
+    local line_budget="$2"
+    local -a diff_args=()
+    local file_diff=""
+    local total_lines=0
+
+    mapfile -t diff_args < <(build_git_diff_args)
+    file_diff=$(git diff "${diff_args[@]}" -- "$file_path" 2>/dev/null)
+
+    if [[ -z "$file_diff" ]]; then
+        return 0
+    fi
+
+    total_lines=$(printf '%s\n' "$file_diff" | wc -l | awk '{print $1}')
+
+    if (( total_lines <= line_budget )); then
+        printf '%s\n' "$file_diff"
+        return 0
+    fi
+
+    printf '%s\n' "$file_diff" | sed -n "1,${line_budget}p"
+    printf '[truncated file excerpt: showing first %d of %d lines for %s]\n' "$line_budget" "$total_lines" "$file_path"
+}
+
+build_diff_analysis() {
+    local -a diff_args=()
+    local -a summary_args=()
+    local diff_stat=""
+    local name_status=""
+    local full_diff=""
+    local total_lines=0
+    local analysis=""
+    local file_impact_summary=""
+    local file_patch_sections=""
+    local files_without_patch=""
+    local min_file_excerpt_lines=30
+    local remaining_patch_budget=0
+    local remaining_files=0
+    local file_count=0
+    local -a files=()
+    local -A file_status=()
+
+    debug "Getting git diff with options - staged-only mode: $STAGED_ONLY, context: $INCLUDE_CONTEXT"
+
+    mapfile -t diff_args < <(build_git_diff_args)
+    mapfile -t summary_args < <(build_git_summary_args)
+
+    diff_stat=$(git diff "${summary_args[@]}" --stat 2>/dev/null)
+    name_status=$(git diff "${summary_args[@]}" --name-status 2>/dev/null)
+    full_diff=$(git diff "${diff_args[@]}" 2>/dev/null)
+
+    if [[ -z "$name_status" && -z "$full_diff" ]]; then
+        error "No staged changes found"
+    fi
+
+    total_lines=$(printf '%s\n' "$full_diff" | wc -l | awk '{print $1}')
+    debug "Git diff captured successfully (${total_lines} lines)"
+
+    analysis+="Git diff overview"$'\n'
+    analysis+="Diff stat:"$'\n'
+    analysis+="${diff_stat:-<empty>}"$'\n\n'
+    analysis+="Name status:"$'\n'
+    analysis+="${name_status:-<empty>}"$'\n'
+
+    if (( MAX_DIFF_LINES <= 0 || total_lines <= MAX_DIFF_LINES )); then
+        analysis+=$'\n'"Patch detail:"$'\n'
+        analysis+="${full_diff:-<empty>}"$'\n'
+        echo "$analysis"
+        return 0
+    fi
+
+    warn "Large diff detected (${total_lines} lines). Building per-file excerpts within ${MAX_DIFF_LINES} lines." >&2
+
+    while IFS=$'\t' read -r status primary_path secondary_path; do
+        local file_path=""
+
+        [[ -z "$status" ]] && continue
+
+        if [[ "$status" == R* || "$status" == C* ]]; then
+            file_path="${secondary_path:-$primary_path}"
         else
-            error "No changes found"
+            file_path="$primary_path"
         fi
-    fi
-    
-    # Limit diff lines if specified
-    if [[ $MAX_DIFF_LINES -gt 0 ]]; then
-        local total_lines
-        total_lines=$(eval "$diff_cmd" 2>/dev/null | wc -l)
-        debug "Git diff has $total_lines total lines"
-        
-        if [[ $total_lines -gt $MAX_DIFF_LINES ]]; then
-            diff_output=$(echo "$diff_output" | head -n "$MAX_DIFF_LINES")
-            warn "Diff truncated to $MAX_DIFF_LINES lines (was $total_lines lines)"
-            debug "Diff truncated to $MAX_DIFF_LINES lines"
+
+        files+=("$file_path")
+        file_status["$file_path"]="$status"
+    done <<< "$name_status"
+
+    file_count=${#files[@]}
+    remaining_patch_budget=$MAX_DIFF_LINES
+    remaining_files=$file_count
+
+    for file_path in "${files[@]}"; do
+        local numstat_line=""
+        local added="?"
+        local deleted="?"
+        local status_code="${file_status[$file_path]}"
+        local file_excerpt=""
+        local excerpt_lines=0
+        local per_file_budget=0
+
+        numstat_line=$(git diff "${summary_args[@]}" --numstat -- "$file_path" 2>/dev/null | sed -n '1p')
+        if [[ -n "$numstat_line" ]]; then
+            added=$(printf '%s\n' "$numstat_line" | awk '{print $1}')
+            deleted=$(printf '%s\n' "$numstat_line" | awk '{print $2}')
         fi
+
+        file_impact_summary+="- ${status_code} ${file_path} (+${added}/-${deleted})"$'\n'
+
+        if (( remaining_files > 0 )); then
+            per_file_budget=$(( remaining_patch_budget / remaining_files ))
+        fi
+
+        if (( per_file_budget < min_file_excerpt_lines )); then
+            files_without_patch+="- ${status_code} ${file_path}"$'\n'
+            remaining_files=$((remaining_files - 1))
+            continue
+        fi
+
+        file_excerpt=$(build_file_diff_excerpt "$file_path" "$per_file_budget")
+        if [[ -n "$file_excerpt" ]]; then
+            excerpt_lines=$(printf '%s\n' "$file_excerpt" | wc -l | awk '{print $1}')
+            file_patch_sections+="### ${status_code} ${file_path}"$'\n'
+            file_patch_sections+="$file_excerpt"$'\n\n'
+            remaining_patch_budget=$((remaining_patch_budget - excerpt_lines))
+            if (( remaining_patch_budget < 0 )); then
+                remaining_patch_budget=0
+            fi
+        else
+            files_without_patch+="- ${status_code} ${file_path}"$'\n'
+        fi
+
+        remaining_files=$((remaining_files - 1))
+    done
+
+    analysis+=$'\n'"File impact summary:"$'\n'
+    analysis+="${file_impact_summary:-<empty>}"$'\n'
+
+    if [[ -n "$file_patch_sections" ]]; then
+        analysis+="Per-file patch excerpts:"$'\n'
+        analysis+="$file_patch_sections"
     fi
-    
-    debug "Git diff captured successfully ($(echo "$diff_output" | wc -l) lines)"
-    echo "$diff_output"
+
+    if [[ -n "$files_without_patch" ]]; then
+        analysis+="Files without patch excerpts due to size budget:"$'\n'
+        analysis+="$files_without_patch"
+    fi
+
+    echo "$analysis"
+}
+
+build_commit_prompt() {
+    local diff_analysis="$1"
+
+    cat <<EOF
+Generate a git commit message from the structured git change data below.
+
+Return exactly this template:
+
+type(scope): short summary
+
+- summarize change group 1
+- summarize change group 2
+- summarize change group 3
+
+Requirements:
+- The first line must be a conventional commit subject in the form type(scope): short summary.
+- Add a blank line between the subject and the bullet list body.
+- Use 3 to 6 bullet points in the body.
+- Cover all major change groups in one message.
+- Body bullets must describe file scope, behavior changes, and any compatibility or risk notes when relevant.
+- Mention tests or documentation changes when they exist. Do not invent them when they do not exist.
+- Use concrete file paths or modules when they help explain scope.
+- Keep the subject concise and the body informative.
+- Do not output markdown fences, labels, explanations, or any text before or after the commit message.
+
+Structured git change data:
+$diff_analysis
+EOF
+}
+
+sanitize_commit_message() {
+    local raw_message="$1"
+
+    printf '%s\n' "$raw_message" | awk '
+        /^[[:space:]]*```[[:alnum:]_-]*[[:space:]]*$/ { next }
+        /^[[:space:]]*[Cc]ommit message:[[:space:]]*$/ { next }
+        { lines[++count] = $0 }
+        END {
+            start = 1
+            while (start <= count && lines[start] ~ /^[[:space:]]*$/) {
+                start++
+            }
+
+            end = count
+            while (end >= start && lines[end] ~ /^[[:space:]]*$/) {
+                end--
+            }
+
+            for (i = start; i <= end; i++) {
+                print lines[i]
+            }
+        }
+    '
 }
 
 # Make HTTP request using curl or wget
@@ -450,30 +645,15 @@ make_http_request() {
 generate_commit_message_claude() {
     local diff_content="$1"
     local model="${GIT_AI_COMMIT_MODEL:-$CLAUDE_MODEL}"
+    local prompt=""
     
     debug "Generating commit message using Claude API with model: $model"
-    
-    local prompt="Based on the following git diff, generate a concise and descriptive commit message following conventional commit format (type: description). Focus on what changed and why, not implementation details.
-
-Git diff:
-$diff_content
-
-Requirements:
-- Use conventional commit format: type(scope): description
-- if changes are related to muiltiple features, split them into multiple commits
-- if the commit message is longer than 72 characters, split it into multiple lines
-- Keep the message under 72 characters for the first line
-- Be specific about what changed
-- Focus on the 'why' rather than the 'how'
-- Use present tense, imperative mood
-- Common types: feat, fix, docs, style, refactor, test, chore
-
-Generate only the commit message, no additional text:"
+    prompt=$(build_commit_prompt "$diff_content")
 
     local json_data=$(cat <<EOF
 {
     "model": "$model",
-    "max_tokens": 100,
+    "max_tokens": 220,
     "messages": [
         {
             "role": "user",
@@ -519,28 +699,15 @@ EOF
 generate_commit_message_openai() {
     local diff_content="$1"
     local model="${GIT_AI_COMMIT_MODEL:-$OPENAI_MODEL}"
+    local prompt=""
     
     debug "Generating commit message using OpenAI API with model: $model"
-    
-    local prompt="Based on the following git diff, generate a concise and descriptive commit message following conventional commit format (type: description). Focus on what changed and why, not implementation details.
-
-Git diff:
-$diff_content
-
-Requirements:
-- Use conventional commit format: type(scope): description
-- Keep the message under 72 characters for the first line
-- Be specific about what changed
-- Focus on the 'why' rather than the 'how'
-- Use present tense, imperative mood
-- Common types: feat, fix, docs, style, refactor, test, chore
-
-Generate only the commit message, no additional text:"
+    prompt=$(build_commit_prompt "$diff_content")
 
     local json_data=$(cat <<EOF
 {
     "model": "$model",
-    "max_tokens": 100,
+    "max_tokens": 220,
     "messages": [
         {
             "role": "user",
@@ -592,23 +759,10 @@ EOF
 generate_commit_message_gemini() {
     local diff_content="$1"
     local model="${GIT_AI_COMMIT_MODEL:-$GEMINI_MODEL}"
+    local prompt=""
     
     debug "Generating commit message using Gemini API with model: $model"
-    
-    local prompt="Based on the following git diff, generate a concise and descriptive commit message following conventional commit format (type: description). Focus on what changed and why, not implementation details.
-
-Git diff:
-$diff_content
-
-Requirements:
-- Use conventional commit format: type(scope): description
-- Keep the message under 72 characters for the first line
-- Be specific about what changed
-- Focus on the 'why' rather than the 'how'
-- Use present tense, imperative mood
-- Common types: feat, fix, docs, style, refactor, test, chore
-
-Generate only the commit message, no additional text:"
+    prompt=$(build_commit_prompt "$diff_content")
 
     # Check if API key starts with 'sk' to determine API format
     if echo "$GEMINI_API_KEY" | grep -q "^sk"; then
@@ -789,7 +943,7 @@ main() {
     
     info "Analyzing changes..."
     local diff_content
-    diff_content=$(get_git_diff)
+    diff_content=$(build_diff_analysis)
     
     info "Generating commit message using $AI_PROVIDER..."
     local commit_message
@@ -802,8 +956,13 @@ main() {
     
     debug "Raw commit message from AI: '$commit_message'"
     
-    # Clean up the commit message (remove any extra whitespace/newlines)
-    commit_message=$(echo "$commit_message" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | head -n 1)
+    # Clean up the commit message while preserving subject + body structure
+    commit_message=$(sanitize_commit_message "$commit_message")
+
+    if [[ -z "$commit_message" ]]; then
+        debug "Commit message became empty after cleanup"
+        error "Failed to generate commit message"
+    fi
     
     debug "Cleaned commit message: '$commit_message'"
     
@@ -823,15 +982,15 @@ main() {
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         debug "User confirmed commit"
-        if [[ "$STAGED_ONLY" == "false" ]]; then
-            info "Adding all changes to staging area..."
-            debug "Running: git add -A"
-            git add -A
-        fi
-        
+
         info "Creating commit..."
-        debug "Running: git commit -m \"$commit_message\""
-        git commit -m "$commit_message"
+        COMMIT_MESSAGE_FILE=$(mktemp "${TMPDIR:-/tmp}/git-ai-commit.XXXXXX")
+        trap cleanup_commit_message_file EXIT
+        printf '%s\n' "$commit_message" > "$COMMIT_MESSAGE_FILE"
+        debug "Running: git commit -F \"$COMMIT_MESSAGE_FILE\""
+        git commit -F "$COMMIT_MESSAGE_FILE"
+        cleanup_commit_message_file
+        trap - EXIT
         success "Commit created successfully!"
     else
         info "Commit cancelled"
