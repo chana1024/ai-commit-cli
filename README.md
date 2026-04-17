@@ -6,6 +6,7 @@ A bash CLI tool that generates commit messages using AI based on structured git 
 
 - **AI-powered commit messages**: Uses Claude, OpenAI, or Gemini to generate conventional commit messages with subject + body
 - **Staged-first workflow**: Analyze and commit only staged changes by default
+- **Explicit `--all` mode**: Stage all changes first when you want the tool to include everything
 - **Dry run mode**: Preview commit messages without committing
 - **Customizable context**: Include more or less context in the analysis
 - **Multiple AI providers**: Support for Claude, OpenAI (default), and Google Gemini
@@ -84,6 +85,9 @@ git-ai-commit
 # Explicit staged mode (same as default, kept for compatibility)
 git-ai-commit --staged
 
+# Stage all changes first, then analyze and commit them
+git-ai-commit --all
+
 # Preview commit message without committing
 git-ai-commit --dry-run
 
@@ -103,6 +107,7 @@ git-ai-commit --provider gemini
 ## Options
 
 - `-s, --staged`: Analyze staged changes (default behavior; kept for compatibility)
+- `-a, --all`: Stage all changes before analysis and commit
 - `-c, --context`: Include more context in the analysis
 - `-d, --dry-run`: Show the commit message without committing
 - `-p, --provider`: AI provider to use (claude, openai, gemini) [default: openai]
@@ -199,9 +204,9 @@ Info: Generating commit message using claude...
 Generated commit message:
 feat(cli): improve structured commit message generation
 
-- expand diff analysis with --stat, --name-status, and per-file excerpts for large patches
-- require a conventional commit subject plus body bullets that cover major change groups
-- preserve multi-line output in dry runs and git commits via a temporary message file
+- git-ai-commit: expand diff analysis with --stat, --name-status, and per-file excerpts for large patches
+- git-ai-commit: require a conventional commit subject plus body bullets that cover major change groups
+- git-ai-commit, README.md: preserve multi-line output in dry runs and git commits and document the new format
 
 Dry run mode - not committing
 ```
@@ -213,6 +218,8 @@ Dry run mode - not committing
 3. **Generates message**: AI analyzes the changes and creates a conventional commit subject plus body bullets
 4. **Confirms with user**: Shows the generated message and asks for confirmation
 5. **Creates commit**: If approved, creates the commit from the current staged snapshot with the full multi-line message
+
+`--all` stages changes before analysis so the analyzed snapshot matches the eventual commit. If you cancel after previewing, the staged changes remain in the index.
 
 ## Troubleshooting
 

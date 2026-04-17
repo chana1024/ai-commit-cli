@@ -7,6 +7,7 @@ set -e
 
 # Default values
 STAGED_ONLY=true
+ALL_CHANGES=false
 INCLUDE_CONTEXT=false
 DRY_RUN=false
 AI_PROVIDER="openai"
@@ -48,6 +49,7 @@ USAGE:
 
 OPTIONS:
     -s, --staged        Analyze staged changes (default behavior; kept for compatibility)
+    -a, --all           Stage all changes before analysis and commit
     -c, --context       Include more context in the analysis
     -d, --dry-run       Show the commit message without committing
     -p, --provider      AI provider to use (claude, openai, gemini) [default: openai]
@@ -57,6 +59,7 @@ OPTIONS:
 EXAMPLES:
     git-ai-commit                    # Analyze staged changes and commit
     git-ai-commit --staged           # Same as default, kept for compatibility
+    git-ai-commit --all              # Stage all changes, then analyze and commit them
     git-ai-commit --dry-run          # Show commit message without committing
     git-ai-commit --context          # Include more context in analysis
 
@@ -109,6 +112,14 @@ warn() {
 cleanup_commit_message_file() {
     if [[ -n "$COMMIT_MESSAGE_FILE" && -f "$COMMIT_MESSAGE_FILE" ]]; then
         rm -f "$COMMIT_MESSAGE_FILE"
+    fi
+}
+
+prepare_commit_scope() {
+    if [[ "$ALL_CHANGES" == "true" ]]; then
+        info "Staging all changes before analysis..."
+        debug "Running: git add -A"
+        git add -A
     fi
 }
 
@@ -389,7 +400,7 @@ build_diff_analysis() {
     local -a files=()
     local -A file_status=()
 
-    debug "Getting git diff with options - staged-only mode: $STAGED_ONLY, context: $INCLUDE_CONTEXT"
+    debug "Getting git diff with options - staged-only mode: $STAGED_ONLY, all-changes mode: $ALL_CHANGES, context: $INCLUDE_CONTEXT"
 
     mapfile -t diff_args < <(build_git_diff_args)
     mapfile -t summary_args < <(build_git_summary_args)
@@ -517,9 +528,11 @@ Requirements:
 - Add a blank line between the subject and the bullet list body.
 - Use 3 to 6 bullet points in the body.
 - Cover all major change groups in one message.
-- Body bullets must describe file scope, behavior changes, and any compatibility or risk notes when relevant.
+- Each body bullet must include the relevant file path(s) or module scope for that change group.
+- Prefer representative files or directories over exhaustive file lists.
+- Body bullets must describe behavior changes and any compatibility or risk notes when relevant.
 - Mention tests or documentation changes when they exist. Do not invent them when they do not exist.
-- Use concrete file paths or modules when they help explain scope.
+- For compatibility, risk, test, or docs bullets, include files when they materially improve clarity.
 - Keep the subject concise and the body informative.
 - Do not output markdown fences, labels, explanations, or any text before or after the commit message.
 
@@ -890,6 +903,12 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             -s|--staged)
+                ALL_CHANGES=false
+                STAGED_ONLY=true
+                shift
+                ;;
+            -a|--all)
+                ALL_CHANGES=true
                 STAGED_ONLY=true
                 shift
                 ;;
@@ -930,6 +949,7 @@ main() {
     debug "Starting git-ai-commit with the following configuration:"
     debug "- AI Provider: $AI_PROVIDER"
     debug "- Staged Only: $STAGED_ONLY"
+    debug "- All Changes: $ALL_CHANGES"
     debug "- Include Context: $INCLUDE_CONTEXT"
     debug "- Dry Run: $DRY_RUN"
     debug "- Max Diff Lines: $MAX_DIFF_LINES"
@@ -940,6 +960,8 @@ main() {
     
     info "Checking dependencies..."
     check_dependencies
+
+    prepare_commit_scope
     
     info "Analyzing changes..."
     local diff_content
